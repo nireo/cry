@@ -1,6 +1,9 @@
 #include <iostream>
+#include "aes.hpp"
 
 int main() {
-    std::cout << "Hello, World!" << std::endl;
+    aes encryptor = aes();
+
+
     return 0;
 }
